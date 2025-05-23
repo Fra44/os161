@@ -441,3 +441,12 @@ file		test/semunit.c
 file		test/kmalloctest.c
 file		test/fstest.c
 optfile net	test/nettest.c
+
+########################################
+#                                      #
+#  Programmazione di Sistema 2024/25   #
+#                                      #
+########################################
+
+defoption hello
+optfile hello main/hello.c
