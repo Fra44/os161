@@ -59,10 +59,45 @@
 /* (this must be > 64K so argument blocks of size ARG_MAX will fit) */
 #define DUMBVM_STACKPAGES    18
 
+#define DUMBVM_WITH_FREE 1
+
 /*
  * Wrap ram_stealmem in a spinlock.
  */
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
+
+//---------------------------------------------------------------------------------------------
+
+#if DUMBVM_WITH_FREE	/* Da qui inizia la nostra implementazione!*/
+
+static struct spinlock freemem_lock = SPINLOCK_INITIALIZER;
+
+static unsigned char *freeRamFrames = NULL;			// bitmap che gestisce stato dei vari frames
+static unsigned long *allocSize = NULL;				// array che tiene traccia dei vari frames consecutivi allocati
+static int nRamFrames = 0;							// variabile che tiene traccia di tutti i frames disponibili
+
+static int allocTableActive = 0;					// flag che indica se la fase di bootstrap è andata a buon fine o meno
+
+static int isTableActive () {						// funzione per verificare stato del bootstrap
+	int active;
+	spinlock_acquire(&freemem_lock);
+	active = allocTableActive;
+	spinlock_release(&freemem_lock);
+	return active;
+}
+
+
+
+
+
+
+
+
+
+
+//---------------------------------------------------------------------------------------------
+
+#else			/* Qui finisce la nostra implementazione e inizia quella vecchia*/
 
 void
 vm_bootstrap(void)
@@ -425,3 +460,5 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 	*ret = new;
 	return 0;
 }
+
+#endif
