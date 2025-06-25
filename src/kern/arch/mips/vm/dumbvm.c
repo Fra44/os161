@@ -86,6 +86,43 @@ static int isTableActive () {						// funzione per verificare stato del bootstra
 	return active;
 }
 
+void vm_bootstrap(void) {
+	nRamFrames = ((int)ram_getsize())/PAGE_SIZE;
+
+	freeRamFrames = kmalloc(sizeof(unsigned char)*nRamFrames);		// allochiamo tutta la ram disponibile!
+	if (freeRamFrames == NULL) return;
+
+	allocSize = kmalloc(sizeof(unsigned long)*nRamFrames);			// anche qui sto allocando tutto (potrebbe creare problemi no?)
+	if (allocSize == NULL) freeRamFrames = NULL; return;
+
+	for (int i=0; i<nRamFrames; i++){				
+		freeRamFrames[i] = (unsigned char)0;		// inizializza tutti i frames a 0 per indicare che sono occupati!
+		allocSize[i] = 0;
+	}
+
+	spinlock_acquire(&freemem_lock);
+	allocTableActive = 1;							// indica che il bootstrap è stato completato correttamente
+	spinlock_release(&freemem_lock);
+}
+
+/*
+ * Check if we're in a context that can sleep. While most of the
+ * operations in dumbvm don't in fact sleep, in a real VM system many
+ * of them would. In those, assert that sleeping is ok. This helps
+ * avoid the situation where syscall-layer code that works ok with
+ * dumbvm starts blowing up during the VM assignment.
+ */
+static void
+dumbvm_can_sleep(void)
+{
+	if (CURCPU_EXISTS()) {
+		/* must not hold spinlocks */
+		KASSERT(curcpu->c_spinlocks == 0);
+
+		/* must not be in an interrupt handler */
+		KASSERT(curthread->t_in_interrupt == 0);
+	}
+}
 
 
 
