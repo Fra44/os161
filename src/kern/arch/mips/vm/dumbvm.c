@@ -198,7 +198,24 @@ void as_destroy(struct addrspace *as){
 	kfree(as);
 }
 
+static int freeppages(paddr_t addr, unsigned long npages){
+	long i, first, np=(long)npages;
+	if(!isTableActive()) return 0;
 
+	first = addr/PAGE_SIZE;								// ricava l'indice della prima pagina da liberare
+	KASSERT(allocSize!=NULL);
+	KASSERT(nRamFrames>first);
+
+	spinlock_acquire(&freemem_lock);
+
+	for(i=first;i<first+np;i++){
+		freeRamFrames[i] = (unsigned char)1;
+	}
+
+	spinlock_release(&freemem_lock);
+
+	return 1;
+}
 
 
 
