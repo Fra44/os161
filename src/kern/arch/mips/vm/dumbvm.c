@@ -124,6 +124,62 @@ dumbvm_can_sleep(void)
 	}
 }
 
+static paddr_t getppages(unsigned long npages) {			// funzione già esistente! Wrapper di ram_stealmem
+	paddr_t addr;											// usata per allocare un blocco di memoria fisica
+
+	addr = getfreeppages(npages);
+	if(addr == 0) {							// call stealmem se non c'è abbastanza memoria
+		spinlock_acquire(&freemem_lock);
+		addr = ram_stealmem(npages);
+		spinlock_release(&freemem_lock);
+	}
+
+	if(addr!=0 && isTableActive()){			// serve a riutilizzare eventuale memoria libera già gestita
+		spinlock_acquire(&freemem_lock);
+		allocSize[addr/PAGE_SIZE] = npages;
+		spinlock_release(&freemem_lock);
+	}
+	return addr;
+};
+
+static paddr_t getfreeppages(unsigned long npages){
+	paddr_t addr;
+	long i, first, found, np = (long)npages;
+	if(!isTableActive()) return 0;
+
+	spinlock_acquire(&freemem_lock);
+
+	for(i=0,first=found=-1;i<nRamFrames;i++){			// for per trovare blocchi liberi
+		if(freeRamFrames[i]){
+			if(i==0 || freeRamFrames[i]==0){
+				first = i;
+			}
+			if(i-first+1> np){
+				found = first;
+				break;
+			}
+		}
+	}
+
+	if(found>=0){
+		for(i=found;i<found+np;i++){					// for per allocare i blocchi liberi trovati
+			freeRamFrames[i] = (unsigned char)0;
+		}
+
+		allocSize[found] = np;
+		addr = (paddr_t)found*PAGE_SIZE;
+	}
+
+	else{
+		addr = 0;
+	}
+
+	spinlock_release(&freemem_lock);
+	return addr;
+}
+
+
+
 
 
 
