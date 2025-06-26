@@ -93,7 +93,10 @@ void vm_bootstrap(void) {
 	if (freeRamFrames == NULL) return;
 
 	allocSize = kmalloc(sizeof(unsigned long)*nRamFrames);			// anche qui sto allocando tutto (potrebbe creare problemi no?)
-	if (allocSize == NULL) freeRamFrames = NULL; return;
+	if (allocSize == NULL) {
+		freeRamFrames = NULL; 
+		return;
+	}
 
 	for (int i=0; i<nRamFrames; i++){				
 		freeRamFrames[i] = (unsigned char)0;		// inizializza tutti i frames a 0 per indicare che sono occupati!
@@ -123,24 +126,6 @@ dumbvm_can_sleep(void)
 		KASSERT(curthread->t_in_interrupt == 0);
 	}
 }
-
-static paddr_t getppages(unsigned long npages) {			// funzione già esistente! Wrapper di ram_stealmem
-	paddr_t addr;											// usata per allocare un blocco di memoria fisica
-
-	addr = getfreeppages(npages);
-	if(addr == 0) {							// call stealmem se non c'è abbastanza memoria
-		spinlock_acquire(&freemem_lock);
-		addr = ram_stealmem(npages);
-		spinlock_release(&freemem_lock);
-	}
-
-	if(addr!=0 && isTableActive()){			// serve a riutilizzare eventuale memoria libera già gestita
-		spinlock_acquire(&freemem_lock);
-		allocSize[addr/PAGE_SIZE] = npages;
-		spinlock_release(&freemem_lock);
-	}
-	return addr;
-};
 
 static paddr_t getfreeppages(unsigned long npages){
 	paddr_t addr;
@@ -178,6 +163,43 @@ static paddr_t getfreeppages(unsigned long npages){
 	return addr;
 }
 
+static paddr_t getppages(unsigned long npages) {			// funzione già esistente! Wrapper di ram_stealmem
+	paddr_t addr;											// usata per allocare un blocco di memoria fisica
+
+	addr = getfreeppages(npages);
+	if(addr == 0) {							// call stealmem se non c'è abbastanza memoria
+		spinlock_acquire(&stealmem_lock);
+		addr = ram_stealmem(npages);
+		spinlock_release(&stealmem_lock);
+	}
+
+	if(addr!=0 && isTableActive()){			// serve a riutilizzare eventuale memoria libera già gestita
+		spinlock_acquire(&freemem_lock);
+		allocSize[addr/PAGE_SIZE] = npages;
+		spinlock_release(&freemem_lock);
+	}
+	return addr;
+};
+
+static int freeppages(paddr_t addr, unsigned long npages){
+	long i, first, np=(long)npages;
+	if(!isTableActive()) return 0;
+
+	first = addr/PAGE_SIZE;								// ricava l'indice della prima pagina da liberare
+	KASSERT(allocSize!=NULL);
+	KASSERT(nRamFrames>first);
+
+	spinlock_acquire(&freemem_lock);
+
+	for(i=first;i<first+np;i++){
+		freeRamFrames[i] = (unsigned char)1;
+	}
+
+	spinlock_release(&freemem_lock);
+
+	return 1;
+}
+
 void free_kpages(vaddr_t addr){
 	if(isTableActive()){
 		paddr_t paddr = addr - MIPS_KSEG0;				// trasforma indirizzo virtuale in uno fisico
@@ -198,24 +220,7 @@ void as_destroy(struct addrspace *as){
 	kfree(as);
 }
 
-static int freeppages(paddr_t addr, unsigned long npages){
-	long i, first, np=(long)npages;
-	if(!isTableActive()) return 0;
 
-	first = addr/PAGE_SIZE;								// ricava l'indice della prima pagina da liberare
-	KASSERT(allocSize!=NULL);
-	KASSERT(nRamFrames>first);
-
-	spinlock_acquire(&freemem_lock);
-
-	for(i=first;i<first+np;i++){
-		freeRamFrames[i] = (unsigned char)1;
-	}
-
-	spinlock_release(&freemem_lock);
-
-	return 1;
-}
 
 //---------------------------------------- ALTRE ROBE!
 

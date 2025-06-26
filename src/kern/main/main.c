@@ -211,7 +211,7 @@ void
 kmain(char *arguments)
 {
 	boot();
-	hello();
+	/*hello(); */
 	menu(arguments);
 
 	/* Should not get here */
