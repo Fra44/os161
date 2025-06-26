@@ -178,6 +178,26 @@ static paddr_t getfreeppages(unsigned long npages){
 	return addr;
 }
 
+void free_kpages(vaddr_t addr){
+	if(isTableActive()){
+		paddr_t paddr = addr - MIPS_KSEG0;				// trasforma indirizzo virtuale in uno fisico
+		long first = paddr/PAGE_SIZE;					// trova l'indice della pagina iniziale
+
+		KASSERT(allocSize!=NULL);
+		KASSERT(nRamFrames>first);
+		freeppages(paddr, allocSize[first]);			// chiama la funzione responsabile della liberazione della memoria
+	}
+}
+
+void as_destroy(struct addrspace *as){
+	dumbvm_can_sleep();
+
+	freeppages(as->as_pbase1, as->as_npages1);			// prendi il physical address base del primo segmento e libera npages a partire da quell'indirizzo
+	freeppages(as->as_pbase2, as->as_npages2);
+	freeppages(as->as_stackpbase, DUMBVM_STACKPAGES);
+	kfree(as);
+}
+
 
 
 
