@@ -148,7 +148,7 @@ lock_create(const char *name)
                 return NULL;
         }
 
-        lock->lk_name = kstrdup(name);
+        lock->lk_name = kstrdup(name);                  // salva il nome per il debug
         if (lock->lk_name == NULL) {
                 kfree(lock);
                 return NULL;
@@ -158,8 +158,29 @@ lock_create(const char *name)
 
         // add stuff here as needed
 
+#if USE_SEMAPHORE_FOR_LOCK
+        lock->lk_sem = sem_create(lock->lk_name,1);     // crea semaforo con nome e valore a 1
+        if (lock->lk_sem == NULL) {
+                kfree(lock->lk_name);
+                kfree(lock);
+                return NULL;
+        }
+#else   
+        lock->lk_wchan = wchan_create(lock->lk_name);   // crea wchan con nome
+        if (lock->lk_wchan == NULL){
+                kfree(lock->lk_name);
+                kfree(lock);
+                return NULL;
+        }
+
+#endif
+        lock->lk_owner = NULL;                          // setta ownership a zero, perchè nessuno l'ha ancora acquisito
+        spinlock_init(&lock->lk_lock);
         return lock;
+        
 }
+
+// --------------------------------------------
 
 void
 lock_destroy(struct lock *lock)
@@ -168,39 +189,80 @@ lock_destroy(struct lock *lock)
 
         // add stuff here as needed
 
-        kfree(lock->lk_name);
-        kfree(lock);
+        spinlock_cleanup(&lock->lk_lock);                       // pulisce lo spinlock interno
+#if USE_SEMAPHORE_FOR_LOCK
+        sem_destroy(lock->lk_sem);                      // distrugge il semaforo
+#else   
+        wchan_destroy(lock->lk_wchan);                  // distrugge il wchan
+#endif
+        kfree(lock->lk_name);                           // dealloca la memoria
+        kfree(lock);                                    
 }
+
+// --------------------------------------------
 
 void
 lock_acquire(struct lock *lock)
 {
-	/* Call this (atomically) before waiting for a lock */
-	//HANGMAN_WAIT(&curthread->t_hangman, &lock->lk_hangman);
 
         // Write this
 
-        (void)lock;  // suppress warning until code gets written
+        KASSERT(lock != NULL);
+        if (lock_do_i_hold(lock)){                      // verifica che questo thread non abbia già acquisito questo lock
+                kprintf("AAACKK!\n");
+        }
+        KASSERT(!(lock_do_i_hold(lock)));
 
-	/* Call this (atomically) once the lock is acquired */
-	//HANGMAN_ACQUIRE(&curthread->t_hangman, &lock->lk_hangman);
+        KASSERT(curthread->t_in_interrupt == false);    // verifica che non ci siano interrupt, perché non si può acquisire un lock durante un interrupt
+
+#if USE_SEMAPHORE_FOR_LOCK
+        P(lock->lk_sem);                                // probe su lock. Se occupato, va in sleep (wchan_sleep) finchè non si libera. SEMAFORO BINARIO GARANTISCE L'OWNERSHIP UNICA!
+        spinlock_acquire(&lock->lk_lock);
+#else   
+        spinlock_acquire(&lock->lk_lock);                       // acquire su spinlock interno
+        while (lock->lk_owner != NULL){                 // aspetto finchè esiste già un Owner. Stiamo quindi verificando attivamente noi l'Ownership!
+                wchan_sleep(lock->lk_wchan, &lock->lk_lock);
+        }
+#endif
+        KASSERT(lock->lk_owner == NULL);
+        lock->lk_owner=curthread;                       // ora settiamo che siamo noi il thread che ha (l'unica) ownership!
+        spinlock_release(&lock->lk_lock);                       // release su spinlock interno
+
 }
+
+// --------------------------------------------
 
 void
 lock_release(struct lock *lock)
 {
-	/* Call this (atomically) when the lock is released */
-	//HANGMAN_RELEASE(&curthread->t_hangman, &lock->lk_hangman);
-
         // Write this
 
-        (void)lock;  // suppress warning until code gets written
+        KASSERT(lock != NULL);
+        KASSERT(lock_do_i_hold(lock));                  // verifica che questo thread SIA in possesso di questo lock
+        spinlock_acquire(&lock->lk_lock);                       // acquire su spinlock interno
+        lock->lk_owner = NULL;                          // resetta ownership
+#if USE_SEMAPHORE_FOR_LOCK
+        V(lock->lk_sem);                                // segnala liberazione di lock
+#else   
+        wchan_wakeone(lock->lk_wchan, &lock->lk_lock);  // notify_one del wchan
+#endif
+        spinlock_release(&lock->lk_lock);                       // release su spinlock interno
+
 }
 
+// --------------------------------------------
+
 bool
-lock_do_i_hold(struct lock *lock)
+lock_do_i_hold(struct lock *lock)                       // serve a verificare se il thread corrente possiede o meno il lock
 {
         // Write this
+#if OPT_SYNCH
+        bool res;
+	spinlock_acquire(&lock->lk_lock);
+	res = lock->lk_owner == curthread;              // se siamo i possessori di questo thread ritorna true, altrimenti false 
+	spinlock_release(&lock->lk_lock);
+	return res;
+#endif
 
         (void)lock;  // suppress warning until code gets written
 
