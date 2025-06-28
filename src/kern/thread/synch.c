@@ -275,7 +275,7 @@ lock_do_i_hold(struct lock *lock)                       // serve a verificare se
 
 
 struct cv *
-cv_create(const char *name)
+cv_create(const char *name)                             // identico a lock_create (no semaforo ovviamente)
 {
         struct cv *cv;
 
@@ -291,41 +291,81 @@ cv_create(const char *name)
         }
 
         // add stuff here as needed
-
+#if OPT_SYNCH
+	cv->cv_wchan = wchan_create(cv->cv_name);
+	if (cv->cv_wchan == NULL) {
+	        kfree(cv->cv_name);
+		kfree(cv);
+		return NULL;
+	}
+        spinlock_init(&cv->cv_lock);
+#endif
         return cv;
 }
 
 void
-cv_destroy(struct cv *cv)
+cv_destroy(struct cv *cv)                               // identico a lock_destroy (no semaforo ovviamente)
 {
         KASSERT(cv != NULL);
 
         // add stuff here as needed
-
+#if OPT_SYNCH
+	spinlock_cleanup(&cv->cv_lock);
+	wchan_destroy(cv->cv_wchan);
+#endif
         kfree(cv->cv_name);
         kfree(cv);
 }
 
 void
-cv_wait(struct cv *cv, struct lock *lock)
+cv_wait(struct cv *cv, struct lock *lock)               // assumi che il lock sia già stato preso!
 {
         // Write this
+#if OPT_SYNCH
+        KASSERT(lock != NULL);
+	KASSERT(cv != NULL);
+	KASSERT(lock_do_i_hold(lock));                          // deve possedere il lock!
+
+	spinlock_acquire(&cv->cv_lock);                         //prendo lock interno per poter operare su cv
+	lock_release(lock);                                             //lascio il lock esterno fino alla notifica
+	wchan_sleep(cv->cv_wchan,&cv->cv_lock);                 // aspetta un wakeone dal cv_signal
+	spinlock_release(&cv->cv_lock);                         // non serve più questo cv, quindi rilascio il lock
+	lock_acquire(lock);                                             // riprendo il lock esterno dopo segnale
+#endif
+
         (void)cv;    // suppress warning until code gets written
         (void)lock;  // suppress warning until code gets written
 }
 
 void
-cv_signal(struct cv *cv, struct lock *lock)
+cv_signal(struct cv *cv, struct lock *lock)             // assumi che il lock sia già stato preso!
 {
         // Write this
+#if OPT_SYNCH
+        KASSERT(lock != NULL);
+	KASSERT(cv != NULL);
+	KASSERT(lock_do_i_hold(lock));                          // verifica che sono effettivamente il possessore del lock
+	spinlock_acquire(&cv->cv_lock);
+	wchan_wakeone(cv->cv_wchan,&cv->cv_lock);               // sveglia un thread dalla coda di wait
+	spinlock_release(&cv->cv_lock);
+#endif
 	(void)cv;    // suppress warning until code gets written
 	(void)lock;  // suppress warning until code gets written
 }
 
 void
-cv_broadcast(struct cv *cv, struct lock *lock)
+cv_broadcast(struct cv *cv, struct lock *lock)          // identico a signal, cambia solo il wakeall
 {
 	// Write this
+#if OPT_SYNCH
+        KASSERT(lock != NULL);
+	KASSERT(cv != NULL);
+	KASSERT(lock_do_i_hold(lock));
+	spinlock_acquire(&cv->cv_lock);
+	wchan_wakeall(cv->cv_wchan,&cv->cv_lock);
+	spinlock_release(&cv->cv_lock);
+#endif
 	(void)cv;    // suppress warning until code gets written
 	(void)lock;  // suppress warning until code gets written
 }
+
