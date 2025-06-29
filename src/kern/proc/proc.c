@@ -75,7 +75,7 @@ struct proc *kproc;
  * Initialize support for pid/waitpid.
  */
 struct proc *
-proc_search_pid(pid_t pid) {								// 4. Trova processo nella tabella tramite PID -> restituisce puntatore
+proc_search_pid(pid_t pid) {								// (X.) Trova processo nella tabella tramite PID -> restituisce puntatore
 #if OPT_WAITPID
   struct proc *p;
   KASSERT(pid>=0&&pid<MAX_PROC);								// verifica che il pid di input sia nell'intervallo di validità
@@ -91,7 +91,7 @@ proc_search_pid(pid_t pid) {								// 4. Trova processo nella tabella tramite P
 // ---------------------------------------------------------------------------------------------------------
 
 static void
-proc_init_waitpid(struct proc *proc, const char *name) {	// 3. Assegna PID e crea strumenti di sincronizzazione
+proc_init_waitpid(struct proc *proc, const char *name) {	// 3. Assegna PID in tabella e crea strumenti di sincronizzazione
 #if OPT_WAITPID
   /* search a free index in table using a circular strategy */
   int i;
@@ -129,7 +129,7 @@ proc_init_waitpid(struct proc *proc, const char *name) {	// 3. Assegna PID e cre
 // ---------------------------------------------------------------------------------------------------------
 
 static void
-proc_end_waitpid(struct proc *proc) {						// 7. Rimuove da tabella e distrugge sincronizzazione
+proc_end_waitpid(struct proc *proc) {						// 6. Rimuove da tabella e distrugge sincronizzazione
 #if OPT_WAITPID
   /* remove the process from the table */
   int i;
@@ -194,7 +194,7 @@ proc_create(const char *name)								// 2. Alloca memoria e inizializza struttur
  * probably want to do so.
  */
 void
-proc_destroy(struct proc *proc)								// 6. Cleanup completo del processo
+proc_destroy(struct proc *proc)								// 5. Cleanup completo del processo
 {
 	/*
 	 * You probably want to destroy and null out much of the
@@ -215,8 +215,8 @@ proc_destroy(struct proc *proc)								// 6. Cleanup completo del processo
 
 	/* VFS fields */
 	if (proc->p_cwd) {											// verifica se il processo ha una directory corrente
-		VOP_DECREF(proc->p_cwd);									// decrementa il riferimento alla directory
-		proc->p_cwd = NULL;											// imposta la directory corrente a NULL
+		VOP_DECREF(proc->p_cwd);									// usa il puntatore per arrivare alla struttura e decrementare il riferimento alla directory
+		proc->p_cwd = NULL;											// imposta la directory corrente a NULL, quindi il puntatore non punta più a niente
 	}
 
 	/* VM fields */
@@ -280,7 +280,7 @@ proc_destroy(struct proc *proc)								// 6. Cleanup completo del processo
  * Create the process structure for the kernel.
  */
 void
-proc_bootstrap(void)
+proc_bootstrap(void)										// Crea la struttura proc del kernel
 {
 	kproc = proc_create("[kernel]");
 	if (kproc == NULL) {
@@ -371,7 +371,7 @@ proc_addthread(struct proc *proc, struct thread *t)
  * of "curproc".
  */
 void
-proc_remthread(struct thread *t)
+proc_remthread(struct thread *t)							// Rimuove un thread dal processo corrente
 {
 	struct proc *proc;
 	int spl;
@@ -381,12 +381,12 @@ proc_remthread(struct thread *t)
 
 	spinlock_acquire(&proc->p_lock);
 	KASSERT(proc->p_numthreads > 0);
-	proc->p_numthreads--;
+	proc->p_numthreads--;										// decrementa il numero di thread 
 	spinlock_release(&proc->p_lock);
 
-	spl = splhigh();
-	t->t_proc = NULL;
-	splx(spl);
+	spl = splhigh();											// setta livello interrupt al massimo per non averne e restituisce old
+	t->t_proc = NULL;											// rende NULL il puntatore al thread corrente
+	splx(spl);													// ripristina il vecchio livello di interrupt
 }
 
 /*
@@ -436,7 +436,7 @@ proc_setas(struct addrspace *newas)
 // ---------------------------------------------------------------------------------------------------------
 
 int 
-proc_wait(struct proc *proc)									// 5. Attende terminazione -> restituisce status
+proc_wait(struct proc *proc)									// 4. Attende terminazione -> restituisce status
 {
 #if OPT_WAITPID
         int return_status;
