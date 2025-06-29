@@ -452,3 +452,4 @@ optfile net	test/nettest.c
 defoption hello
 optfile hello main/hello.c
 defoption waitpid
+defoption syscalls
