@@ -1,5 +1,6 @@
 #include <types.h>
 #include <kern/unistd.h>
+#include <kern/errno.h>
 #include <clock.h>
 #include <copyinout.h>
 #include <syscall.h>
@@ -7,6 +8,9 @@
 #include <proc.h>
 #include <thread.h>
 #include <addrspace.h>
+#include <mips/trapframe.h>
+#include <current.h>
+#include <synch.h>
 
 int sys_write(int fd, userptr_t buf_ptr, size_t size){
     int i;
@@ -49,12 +53,53 @@ int sys_read(int fd, userptr_t buf_ptr, size_t size){
 // --------------------------------------------------
 
 void sys__exit(int status){
-    struct addrspace *as = proc_getas();
 
-    as_destroy(as);
+#if OPT_WAITPID
 
-    thread_exit();
+    struct proc *p = curproc;
+    p->p_status = status & 0xff;                        // salva solo i primi 8 bit dello status (perchè in UNIX l'exit status deve essere di 8 bit)
+    proc_remthread(curthread);                          // decrementa il numero di thread del processo corrente (numthread)
+
+    #if USE_SEMAPHORE_FOR_WAITPID
+        V(p->p_sem);                                    // risveglia eventuali processi in attesa sul semaforo
+    #else
+        lock_acquire(p->p_lock);
+        cv_signal(p->p_cv);                             // risveglia eventuali processi in attesa sul condvar
+        lock_release(p->p_lock);
+    #endif
+
+
+#else
+    struct addrspace *as = proc_getas();                // ottiene l'address space dal processo corrente
+
+    as_destroy(as);                                     // distrugge l'address space, liberando memoria
+
+#endif
+
+    thread_exit();                                      // termina il thread corrente
 
     panic("thread exit returned (should not happen)\n");
     (void) status;
+}
+
+// -----------------------------------------------
+
+int
+sys_waitpid(pid_t pid, userptr_t statusp, int options)
+{
+#if OPT_WAITPID
+  struct proc *p = proc_search_pid(pid);                // (4) cerca il processo figlio con il PID specificato
+  int s;
+  (void)options; /* not handled */
+  if (p==NULL) return -1;                               // se non trova il provesso, ritorna errore
+  s = proc_wait(p);                                     // attende che il professo figlio termini e ottiene il suo exit status
+  if (statusp!=NULL) 
+    *(int*)statusp = s;                                 // se il puntatore statusp non è nullo, scrive lo status di uscita del figlio 
+  return pid;                                           // ritorna il PID del processo atteso
+#else
+  (void)options; /* not handled */
+  (void)pid;
+  (void)statusp;
+  return -1;
+#endif
 }
