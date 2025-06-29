@@ -114,35 +114,35 @@ thread_checkstack(struct thread *thread)
  */
 static
 struct thread *
-thread_create(const char *name)
+thread_create(const char *name)														// ----------------------Thread Create----------------------
 {
 	struct thread *thread;
 
 	DEBUGASSERT(name != NULL);
 
-	thread = kmalloc(sizeof(*thread));
+	thread = kmalloc(sizeof(*thread));													// alloca memoria per thread
 	if (thread == NULL) {
 		return NULL;
 	}
 
-	thread->t_name = kstrdup(name);
+	thread->t_name = kstrdup(name);														// assegna il nome
 	if (thread->t_name == NULL) {
 		kfree(thread);
 		return NULL;
-	}
-	thread->t_wchan_name = "NEW";
-	thread->t_state = S_READY;
+	}																					// inizializza:
+	thread->t_wchan_name = "NEW";															// wchan = "NEW"
+	thread->t_state = S_READY;																// t_state = READY
 
 	/* Thread subsystem fields */
-	thread_machdep_init(&thread->t_machdep);
-	threadlistnode_init(&thread->t_listnode, thread);
-	thread->t_stack = NULL;
-	thread->t_context = NULL;
-	thread->t_cpu = NULL;
-	thread->t_proc = NULL;
+	thread_machdep_init(&thread->t_machdep);												// machinde-dependent portion of thread
+	threadlistnode_init(&thread->t_listnode, thread);										// thread list node
+	thread->t_stack = NULL;																	// stack
+	thread->t_context = NULL;																// context
+	thread->t_cpu = NULL;																	// cpu
+	thread->t_proc = NULL;																	// proc
 	HANGMAN_ACTORINIT(&thread->t_hangman, thread->t_name);
 
-	/* Interrupt state fields */
+	/* Interrupt state fields */														// inizializzazione dei campi per gli interrupt
 	thread->t_in_interrupt = false;
 	thread->t_curspl = IPL_HIGH;
 	thread->t_iplhigh_count = 1; /* corresponding to t_curspl */
@@ -262,9 +262,9 @@ cpu_create(unsigned hardware_number)
  */
 static
 void
-thread_destroy(struct thread *thread)
+thread_destroy(struct thread *thread)												// ----------------------Thread Destroy----------------------
 {
-	KASSERT(thread != curthread);
+	KASSERT(thread != curthread);														// solo se non è il thread corrente
 	KASSERT(thread->t_state != S_RUN);
 
 	/*
@@ -273,9 +273,9 @@ thread_destroy(struct thread *thread)
 	 */
 
 	/* Thread subsystem fields */
-	KASSERT(thread->t_proc == NULL);
+	KASSERT(thread->t_proc == NULL);													// se non ha un processo associato
 	if (thread->t_stack != NULL) {
-		kfree(thread->t_stack);
+		kfree(thread->t_stack);															// dealloca stack (solo se non null)
 	}
 	threadlistnode_cleanup(&thread->t_listnode);
 	thread_machdep_cleanup(&thread->t_machdep);
@@ -283,8 +283,8 @@ thread_destroy(struct thread *thread)
 	/* sheer paranoia */
 	thread->t_wchan_name = "DESTROYED";
 
-	kfree(thread->t_name);
-	kfree(thread);
+	kfree(thread->t_name);																// dealloca memoria di nome perchè l abbiamo creato appositamente
+	kfree(thread);																		// dealloca direttamente il thread con tutto ciò che c'è dentro
 }
 
 /*
@@ -449,7 +449,7 @@ thread_start_cpus(void)
  */
 static
 void
-thread_make_runnable(struct thread *target, bool already_have_lock)
+thread_make_runnable(struct thread *target, bool already_have_lock)					// ----------------------Thread Make Runnable----------------------
 {
 	struct cpu *targetcpu;
 
@@ -461,12 +461,12 @@ thread_make_runnable(struct thread *target, bool already_have_lock)
 		KASSERT(spinlock_do_i_hold(&targetcpu->c_runqueue_lock));
 	}
 	else {
-		spinlock_acquire(&targetcpu->c_runqueue_lock);
+		spinlock_acquire(&targetcpu->c_runqueue_lock);									// se non avevamo già il lock lo acquisiamo
 	}
 
 	/* Target thread is now ready to run; put it on the run queue. */
-	target->t_state = S_READY;
-	threadlist_addtail(&targetcpu->c_runqueue, target);
+	target->t_state = S_READY;															// settiamo stato a READY
+	threadlist_addtail(&targetcpu->c_runqueue, target);									// aggiungiamo il thread alla lista di scheduling
 
 	if (targetcpu->c_isidle && targetcpu != curcpu->c_self) {
 		/*
@@ -492,59 +492,60 @@ thread_make_runnable(struct thread *target, bool already_have_lock)
  * as the caller, unless the scheduler intervenes first.
  */
 int
-thread_fork(const char *name,
-	    struct proc *proc,
-	    void (*entrypoint)(void *data1, unsigned long data2),
-	    void *data1, unsigned long data2)
+thread_fork(														// ----------------------Thread Fork----------------------
+		const char *name,
+        struct proc *proc,															// processo a cui associare il thread (se NULL eredita dal chiamante)
+        void (*entrypoint)(void *data1, unsigned long data2),						// funzione di ingresso del nuovo thread
+        void *data1, unsigned long data2)											// parametri per la funzione di ingresso
 {
-	struct thread *newthread;
-	int result;
+    struct thread *newthread;
+    int result;
 
-	newthread = thread_create(name);
-	if (newthread == NULL) {
-		return ENOMEM;
-	}
+    newthread = thread_create(name);												// crea la struttura thread e inizializza i campi base
+    if (newthread == NULL) {
+        return ENOMEM;																// errore: memoria insufficiente
+    }
 
-	/* Allocate a stack */
-	newthread->t_stack = kmalloc(STACK_SIZE);
-	if (newthread->t_stack == NULL) {
-		thread_destroy(newthread);
-		return ENOMEM;
-	}
-	thread_checkstack_init(newthread);
+    /* Allocate a stack */
+    newthread->t_stack = kmalloc(STACK_SIZE);										// alloca lo stack per il nuovo thread
+    if (newthread->t_stack == NULL) {
+        thread_destroy(newthread);													// libera la struttura thread se lo stack fallisce
+        return ENOMEM;																// errore: memoria insufficiente
+    }
+    thread_checkstack_init(newthread);												// inizializza la guardia per rilevare overflow dello stack
 
-	/*
-	 * Now we clone various fields from the parent thread.
-	 */
+    /*
+     * Now we clone various fields from the parent thread.
+     */
 
-	/* Thread subsystem fields */
-	newthread->t_cpu = curthread->t_cpu;
+    /* Thread subsystem fields */
+    newthread->t_cpu = curthread->t_cpu;											// assegna la CPU corrente al nuovo thread
 
-	/* Attach the new thread to its process */
-	if (proc == NULL) {
-		proc = curthread->t_proc;
-	}
-	result = proc_addthread(proc, newthread);
-	if (result) {
-		/* thread_destroy will clean up the stack */
-		thread_destroy(newthread);
-		return result;
-	}
+    /* Attach the new thread to its process */
+    if (proc == NULL) {
+        proc = curthread->t_proc;													// se proc è NULL, eredita il processo del thread chiamante
+    }
+    result = proc_addthread(proc, newthread);										// aggiunge il nuovo thread alla lista dei thread del processo (quanti, non quali!)
+    if (result) {
+        /* thread_destroy will clean up the stack */
+        thread_destroy(newthread);													// libera risorse in caso di errore
+        return result;																// ritorna il codice di errore
+    }	
 
-	/*
-	 * Because new threads come out holding the cpu runqueue lock
-	 * (see notes at bottom of thread_switch), we need to account
-	 * for the spllower() that will be done releasing it.
-	 */
-	newthread->t_iplhigh_count++;
+    /*
+     * Because new threads come out holding the cpu runqueue lock
+     * (see notes at bottom of thread_switch), we need to account
+     * for the spllower() that will be done releasing it.
+     */
+    newthread->t_iplhigh_count++;													// incrementa il contatore IPL per la gestione degli interrupt
 
-	/* Set up the switchframe so entrypoint() gets called */
-	switchframe_init(newthread, entrypoint, data1, data2);
+    /* Set up the switchframe so entrypoint() gets called */
+    switchframe_init(newthread, entrypoint, data1, data2);							// prepara il contesto di esecuzione per chiamare entrypoint (così dopo context switch parte da entrypoint)
 
-	/* Lock the current cpu's run queue and make the new thread runnable */
-	thread_make_runnable(newthread, false);
+    /* Lock the current cpu's run queue and make the new thread runnable */
+    thread_make_runnable(newthread, false);											// inserisce il nuovo thread nella runqueue della CPU e lo rende eseguibile
 
-	return 0;
+    return 0;																		
 }
 
 /*
@@ -559,172 +560,172 @@ thread_fork(const char *name,
  */
 static
 void
-thread_switch(threadstate_t newstate, struct wchan *wc, struct spinlock *lk)
-{
-	struct thread *cur, *next;
-	int spl;
+thread_switch(threadstate_t newstate, struct wchan *wc, struct spinlock *lk)				// ----------------------Thread Switch----------------------
+{																								// Cambia il thread corrente con un altro, cambiando anche stato
+    struct thread *cur, *next; 																	
+    int spl; 																					// Variabile per salvare il livello di interrupt
 
-	DEBUGASSERT(curcpu->c_curthread == curthread);
-	DEBUGASSERT(curthread->t_cpu == curcpu->c_self);
+    DEBUGASSERT(curcpu->c_curthread == curthread); 	
+    DEBUGASSERT(curthread->t_cpu == curcpu->c_self);
 
-	/* Explicitly disable interrupts on this processor */
-	spl = splhigh();
+    /* Explicitly disable interrupts on this processor */
+    spl = splhigh(); 																			// Disabilita gli interrupt e salva il vecchio livello
 
-	cur = curthread;
+    cur = curthread; 
 
-	/*
-	 * If we're idle, return without doing anything. This happens
-	 * when the timer interrupt interrupts the idle loop.
-	 */
-	if (curcpu->c_isidle) {
-		splx(spl);
-		return;
-	}
+    /*
+     * If we're idle, return without doing anything. This happens
+     * when the timer interrupt interrupts the idle loop.
+     */
+    if (curcpu->c_isidle) { 																	// Se la CPU è già in idle, non fa nulla
+        splx(spl); 																				// Ripristina il livello di interrupt ed esci
+        return; 				
+    }
 
-	/* Check the stack guard band. */
-	thread_checkstack(cur);
+    /* Check the stack guard band. */
+    thread_checkstack(cur); 																	// Controlla che non ci sia stato overflow dello stack
 
-	/* Lock the run queue. */
-	spinlock_acquire(&curcpu->c_runqueue_lock);
+    /* Lock the run queue. */
+    spinlock_acquire(&curcpu->c_runqueue_lock); 												// Acquisisce il lock sulla runqueue della CPU
 
-	/* Micro-optimization: if nothing to do, just return */
-	if (newstate == S_READY && threadlist_isempty(&curcpu->c_runqueue)) {
-		spinlock_release(&curcpu->c_runqueue_lock);
-		splx(spl);
-		return;
-	}
+    /* Micro-optimization: if nothing to do, just return */
+    if (newstate == S_READY && threadlist_isempty(&curcpu->c_runqueue)) { 						// Se non ci sono altri thread pronti
+        spinlock_release(&curcpu->c_runqueue_lock);													// Rilascia il lock
+        splx(spl); 																					// Ripristina il livello di interrupt
+        return; 																					// Esce dalla funzione
+    }
 
-	/* Put the thread in the right place. */
-	switch (newstate) {
-	    case S_RUN:
-		panic("Illegal S_RUN in thread_switch\n");
-	    case S_READY:
-		thread_make_runnable(cur, true /*have lock*/);
-		break;
-	    case S_SLEEP:
-		cur->t_wchan_name = wc->wc_name;
-		/*
-		 * Add the thread to the list in the wait channel, and
-		 * unlock same. To avoid a race with someone else
-		 * calling wchan_wake*, we must keep the wchan's
-		 * associated spinlock locked from the point the
-		 * caller of wchan_sleep locked it until the thread is
-		 * on the list.
-		 */
-		threadlist_addtail(&wc->wc_threads, cur);
-		spinlock_release(lk);
-		break;
-	    case S_ZOMBIE:
-		cur->t_wchan_name = "ZOMBIE";
-		threadlist_addtail(&curcpu->c_zombies, cur);
-		break;
-	}
-	cur->t_state = newstate;
+    /* Put the thread in the right place. */
+    switch (newstate) { 																		// Gestisce il nuovo stato del thread corrente
+        case S_RUN:
+        	panic("Illegal S_RUN in thread_switch\n"); 													// Non dovrebbe mai capitare
+        case S_READY:																				// READY
+        	thread_make_runnable(cur, true /*have lock*/); 												// Rimette il thread corrente nella runqueue
+        	break;
+	case S_SLEEP:																					// SLEEP
+        	cur->t_wchan_name = wc->wc_name; 															// Imposta il nome del canale di attesa
+        /*
+         * Add the thread to the list in the wait channel, and
+         * unlock same. To avoid a race with someone else
+         * calling wchan_wake*, we must keep the wchan's
+         * associated spinlock locked from the point the
+         * caller of wchan_sleep locked it until the thread is
+         * on the list.
+         */
+        threadlist_addtail(&wc->wc_threads, cur); 														// Aggiunge il thread alla lista dei dormienti sul canale
+        spinlock_release(lk); 																			// Rilascia il lock del canale di attesa
+        break;
+        case S_ZOMBIE:																				// ZOMBIE
+        cur->t_wchan_name = "ZOMBIE"; 																	// Imposta il nome del canale a "ZOMBIE"
+        threadlist_addtail(&curcpu->c_zombies, cur); 													// Aggiunge il thread alla lista degli zombie
+        break;
+    }
+    cur->t_state = newstate;																		// Aggiorna lo stato del thread corrente
 
-	/*
-	 * Get the next thread. While there isn't one, call cpu_idle().
-	 * curcpu->c_isidle must be true when cpu_idle is
-	 * called. Unlock the runqueue while idling too, to make sure
-	 * things can be added to it.
-	 *
-	 * Note that we don't need to unlock the runqueue atomically
-	 * with idling; becoming unidle requires receiving an
-	 * interrupt (either a hardware interrupt or an interprocessor
-	 * interrupt from another cpu posting a wakeup) and idling
-	 * *is* atomic with respect to re-enabling interrupts.
-	 *
-	 * Note that c_isidle becomes true briefly even if we don't go
-	 * idle. However, because one is supposed to hold the runqueue
-	 * lock to look at it, this should not be visible or matter.
-	 */
+    /*
+     * Get the next thread. While there isn't one, call cpu_idle().
+     * curcpu->c_isidle must be true when cpu_idle is
+     * called. Unlock the runqueue while idling too, to make sure
+     * things can be added to it.
+     *
+     * Note that we don't need to unlock the runqueue atomically
+     * with idling; becoming unidle requires receiving an
+     * interrupt (either a hardware interrupt or an interprocessor
+     * interrupt from another cpu posting a wakeup) and idling
+     * *is* atomic with respect to re-enabling interrupts.
+     *
+     * Note that c_isidle becomes true briefly even if we don't go
+     * idle. However, because one is supposed to hold the runqueue
+     * lock to look at it, this should not be visible or matter.
+     */
 
-	/* The current cpu is now idle. */
-	curcpu->c_isidle = true;
-	do {
-		next = threadlist_remhead(&curcpu->c_runqueue);
-		if (next == NULL) {
-			spinlock_release(&curcpu->c_runqueue_lock);
-			cpu_idle();
-			spinlock_acquire(&curcpu->c_runqueue_lock);
-		}
-	} while (next == NULL);
-	curcpu->c_isidle = false;
+    /* The current cpu is now idle. */
+    curcpu->c_isidle = true; // Segna la CPU come idle
+    do {
+        next = threadlist_remhead(&curcpu->c_runqueue); 											// Prende il prossimo thread dalla runqueue
+        if (next == NULL) { 																		// Se non c'è nessun thread pronto
+            spinlock_release(&curcpu->c_runqueue_lock); 												// Rilascia il lock sulla runqueue
+            cpu_idle(); 																				// Mette la CPU in idle finché non arriva un interrupt
+            spinlock_acquire(&curcpu->c_runqueue_lock); 												// Riacquisisce il lock sulla runqueue
+        }
+    } while (next == NULL); 																			// Ripete finché non trova un thread pronto
+    curcpu->c_isidle = false; 																		// La CPU non è più idle
 
-	/*
-	 * Note that curcpu->c_curthread may be the same variable as
-	 * curthread and it may not be, depending on how curthread and
-	 * curcpu are defined by the MD code. We'll assign both and
-	 * assume the compiler will optimize one away if they're the
-	 * same.
-	 */
-	curcpu->c_curthread = next;
-	curthread = next;
+    /*
+     * Note that curcpu->c_curthread may be the same variable as
+     * curthread and it may not be, depending on how curthread and
+     * curcpu are defined by the MD code. We'll assign both and
+     * assume the compiler will optimize one away if they're the
+     * same.
+     */
+    curcpu->c_curthread = next; 																	// Aggiorna il thread corrente della CPU
+    curthread = next; 																				// Aggiorna il thread globale corrente
 
-	/* do the switch (in assembler in switch.S) */
-	switchframe_switch(&cur->t_context, &next->t_context);
+    /* do the switch (in assembler in switch.S) */
+    switchframe_switch(&cur->t_context, &next->t_context); 											// Effettua il vero context switch (in assembler)
 
-	/*
-	 * When we get to this point we are either running in the next
-	 * thread, or have come back to the same thread again,
-	 * depending on how you look at it. That is,
-	 * switchframe_switch returns immediately in another thread
-	 * context, which in general will be executing here with a
-	 * different stack and different values in the local
-	 * variables. (Although new threads go to thread_startup
-	 * instead.) But, later on when the processor, or some
-	 * processor, comes back to the previous thread, it's also
-	 * executing here with the *same* value in the local
-	 * variables.
-	 *
-	 * The upshot, however, is as follows:
-	 *
-	 *    - The thread now currently running is "cur", not "next",
-	 *      because when we return from switchrame_switch on the
-	 *      same stack, we're back to the thread that
-	 *      switchframe_switch call switched away from, which is
-	 *      "cur".
-	 *
-	 *    - "cur" is _not_ the thread that just *called*
-	 *      switchframe_switch.
-	 *
-	 *    - If newstate is S_ZOMB we never get back here in that
-	 *      context at all.
-	 *
-	 *    - If the thread just chosen to run ("next") was a new
-	 *      thread, we don't get to this code again until
-	 *      *another* context switch happens, because when new
-	 *      threads return from switchframe_switch they teleport
-	 *      to thread_startup.
-	 *
-	 *    - At this point the thread whose stack we're now on may
-	 *      have been migrated to another cpu since it last ran.
-	 *
-	 * The above is inherently confusing and will probably take a
-	 * while to get used to.
-	 *
-	 * However, the important part is that code placed here, after
-	 * the call to switchframe_switch, does not necessarily run on
-	 * every context switch. Thus any such code must be either
-	 * skippable on some switches or also called from
-	 * thread_startup.
-	 */
+    /*
+     * When we get to this point we are either running in the next
+     * thread, or have come back to the same thread again,
+     * depending on how you look at it. That is,
+     * switchframe_switch returns immediately in another thread
+     * context, which in general will be executing here with a
+     * different stack and different values in the local
+     * variables. (Although new threads go to thread_startup
+     * instead.) But, later on when the processor, or some
+     * processor, comes back to the previous thread, it's also
+     * executing here with the *same* value in the local
+     * variables.
+     *
+     * The upshot, however, is as follows:
+     *
+     *    - The thread now currently running is "cur", not "next",
+     *      because when we return from switchrame_switch on the
+     *      same stack, we're back to the thread that
+     *      switchframe_switch call switched away from, which is
+     *      "cur".
+     *
+     *    - "cur" is _not_ the thread that just *called*
+     *      switchframe_switch.
+     *
+     *    - If newstate is S_ZOMB we never get back here in that
+     *      context at all.
+     *
+     *    - If the thread just chosen to run ("next") was a new
+     *      thread, we don't get to this code again until
+     *      *another* context switch happens, because when new
+     *      threads return from switchframe_switch they teleport
+     *      to thread_startup.
+     *
+     *    - At this point the thread whose stack we're now on may
+     *      have been migrated to another cpu since it last ran.
+     *
+     * The above is inherently confusing and will probably take a
+     * while to get used to.
+     *
+     * However, the important part is that code placed here, after
+     * the call to switchframe_switch, does not necessarily run on
+     * every context switch. Thus any such code must be either
+     * skippable on some switches or also called from
+     * thread_startup.
+     */
 
 
-	/* Clear the wait channel and set the thread state. */
-	cur->t_wchan_name = NULL;
-	cur->t_state = S_RUN;
+    /* Clear the wait channel and set the thread state. */
+    cur->t_wchan_name = NULL; // Pulisce il nome del canale di attesa
+    cur->t_state = S_RUN; // Imposta lo stato del thread a RUN
 
-	/* Unlock the run queue. */
-	spinlock_release(&curcpu->c_runqueue_lock);
+    /* Unlock the run queue. */
+    spinlock_release(&curcpu->c_runqueue_lock); 													// Rilascia il lock sulla runqueue
 
-	/* Activate our address space in the MMU. */
-	as_activate();
+    /* Activate our address space in the MMU. */
+    as_activate();																					// Attiva lo spazio di indirizzamento del thread corrente
 
-	/* Clean up dead threads. */
-	exorcise();
+    /* Clean up dead threads. */
+    exorcise(); 																					// Elimina i thread zombie
 
-	/* Turn interrupts back on. */
-	splx(spl);
+    /* Turn interrupts back on. */
+    splx(spl); 																						// Ripristina il livello di interrupt originale
 }
 
 /*
@@ -776,7 +777,7 @@ thread_startup(void (*entrypoint)(void *data1, unsigned long data2),
  * Does not return.
  */
 void
-thread_exit(void)
+thread_exit(void)																			// ----------------------Thread Exit----------------------
 {
 	struct thread *cur;
 
@@ -786,7 +787,7 @@ thread_exit(void)
 	 * Detach from our process. You might need to move this action
 	 * around, depending on how your wait/exit works.
 	 */
-	proc_remthread(cur);
+	proc_remthread(cur);																		// rimuove un thread dal processo corrente
 
 	/* Make sure we *are* detached (move this only if you're sure!) */
 	KASSERT(cur->t_proc == NULL);
@@ -794,9 +795,9 @@ thread_exit(void)
 	/* Check the stack guard band. */
 	thread_checkstack(cur);
 
-	/* Interrupts off on this processor */
-        splhigh();
-	thread_switch(S_ZOMBIE, NULL, NULL);
+	/* Interrupts off on this processor */	
+    splhigh();																					// disabilita gli interrupts
+	thread_switch(S_ZOMBIE, NULL, NULL);														// forza un context switch, mettendosi in ZOMBIE
 	panic("braaaaaaaiiiiiiiiiiinssssss\n");
 }
 
@@ -804,9 +805,9 @@ thread_exit(void)
  * Yield the cpu to another process, but stay runnable.
  */
 void
-thread_yield(void)
+thread_yield(void)																			//----------------------Thread Yield----------------------
 {
-	thread_switch(S_READY, NULL, NULL);
+	thread_switch(S_READY, NULL, NULL);															// forza un context switch, mettendosi da parte (RUNNING -> READY)
 }
 
 ////////////////////////////////////////////////////////////

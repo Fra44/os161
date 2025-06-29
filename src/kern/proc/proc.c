@@ -385,7 +385,7 @@ proc_remthread(struct thread *t)							// Rimuove un thread dal processo corrent
 	spinlock_release(&proc->p_lock);
 
 	spl = splhigh();											// setta livello interrupt al massimo per non averne e restituisce old
-	t->t_proc = NULL;											// rende NULL il puntatore al thread corrente
+	t->t_proc = NULL;											// il thread non appartiene più a nessun processo: rimuove il collegamento tra il thread e il processo a cui apparteneva
 	splx(spl);													// ripristina il vecchio livello di interrupt
 }
 
