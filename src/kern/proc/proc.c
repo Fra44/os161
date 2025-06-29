@@ -49,41 +49,143 @@
 #include <addrspace.h>
 #include <vnode.h>
 
+#if OPT_WAITPID
+#include <synch.h>
+
+// ---------------------------------------------------------------------------------------------------------
+
+#define MAX_PROC 100
+static struct _processTable {								// PROCESS TABLE
+  int active;           /* initial value 0 */
+  struct proc *proc[MAX_PROC+1]; /* [0] not used. pids are >= 1 */
+  int last_i;           /* index of last allocated pid */
+  struct spinlock lk;	/* Lock for this table */
+} processTable;
+
+#endif
 /*
  * The process for the kernel; this holds all the kernel-only threads.
  */
 struct proc *kproc;
+
+// ---------------------------------------------------------------------------------------------------------
+
+/*
+ * G.Cabodi - 2019
+ * Initialize support for pid/waitpid.
+ */
+struct proc *
+proc_search_pid(pid_t pid) {								// 4. Trova processo nella tabella tramite PID -> restituisce puntatore
+#if OPT_WAITPID
+  struct proc *p;
+  KASSERT(pid>=0&&pid<MAX_PROC);								// verifica che il pid di input sia nell'intervallo di validità
+  p = processTable.proc[pid];									// ottiene il processo corrispondente al pid di input dalla tabella
+  KASSERT(p->p_pid==pid);
+  return p;														// restituisce il puntatore al processo trovato
+#else
+  (void)pid;
+  return NULL;
+#endif
+}
+
+// ---------------------------------------------------------------------------------------------------------
+
+static void
+proc_init_waitpid(struct proc *proc, const char *name) {	// 3. Assegna PID e crea strumenti di sincronizzazione
+#if OPT_WAITPID
+  /* search a free index in table using a circular strategy */
+  int i;
+  spinlock_acquire(&processTable.lk);							// acquisisce lock sulla tabella dei processi
+  i = processTable.last_i+1;									// parte da posizione successiva a ultimo PID
+  proc->p_pid = 0;												// inizializza il pid a 0
+  if (i>MAX_PROC) i=1;											// strategia circolare: se arriva alla fine, ricomincia
+  while (i!=processTable.last_i) {
+    if (processTable.proc[i] == NULL) {							// non appena trova un buco
+      processTable.proc[i] = proc;									// inserisce il processo nello slot
+      processTable.last_i = i;										// setta che l'ultimo pid inserito è i
+      proc->p_pid = i;												// ed assegna questo pid al processo
+      break;
+    }
+    i++;
+    if (i>MAX_PROC) i=1;
+  }
+  spinlock_release(&processTable.lk);							// rilascia il lock
+  if (proc->p_pid==0) {
+    panic("too many processes. proc table is full\n");			// se pid è rimasto 0 => panic
+  }
+  proc->p_status = 0;											// se tutto ok (quindi non è stato lanciato panic) assegna status = 0 (ok)
+#if USE_SEMAPHORE_FOR_WAITPID
+  proc->p_sem = sem_create(name, 0);							// se uso semaforo, lo creo
+#else
+  proc->p_cv = cv_create(name);									// se uso condvar, la creo + creo lock da utilizzare
+  proc->p_lock = lock_create(name);
+#endif
+#else
+  (void)proc;
+  (void)name;
+#endif
+}
+
+// ---------------------------------------------------------------------------------------------------------
+
+static void
+proc_end_waitpid(struct proc *proc) {						// 7. Rimuove da tabella e distrugge sincronizzazione
+#if OPT_WAITPID
+  /* remove the process from the table */
+  int i;
+  spinlock_acquire(&processTable.lk);								// acquisisce lock sulla tabella dei processi
+  i = proc->p_pid;												// ottiene il PID del processo da rimuovere
+  KASSERT(i>0 && i<=MAX_PROC);									// verifica che il PID sia nell'intervallo di validità
+  processTable.proc[i] = NULL;									// rimuove il processo dalla tabella
+  spinlock_release(&processTable.lk);								// rilascia il lock sulla tabella dei processi
+
+#if USE_SEMAPHORE_FOR_WAITPID
+  sem_destroy(proc->p_sem);										// distrugge il semaforo del processo
+#else
+  cv_destroy(proc->p_cv);										// distrugge il condvar del processo + distrugge il lock usato col condvar
+  lock_destroy(proc->p_lock);	
+#endif
+#else
+  (void)proc;
+#endif
+}
+
+// ---------------------------------------------------------------------------------------------------------
 
 /*
  * Create a proc structure.
  */
 static
 struct proc *
-proc_create(const char *name)
+proc_create(const char *name)								// 2. Alloca memoria e inizializza struttura base -> restituisce puntatore a nuovo processo
 {
 	struct proc *proc;
 
-	proc = kmalloc(sizeof(*proc));
+	proc = kmalloc(sizeof(*proc));								// alloca memoria per la struct processo
 	if (proc == NULL) {
 		return NULL;
 	}
-	proc->p_name = kstrdup(name);
+	proc->p_name = kstrdup(name);								// duplica la stringa per il debug
 	if (proc->p_name == NULL) {
 		kfree(proc);
 		return NULL;
 	}
-
-	proc->p_numthreads = 0;
-	spinlock_init(&proc->p_lock);
+																// inizializza tutto il necessario:
+	proc->p_numthreads = 0;											// num threads
+	spinlock_init(&proc->p_lock);									// spinlock
 
 	/* VM fields */
-	proc->p_addrspace = NULL;
+	proc->p_addrspace = NULL;										// address space
 
 	/* VFS fields */
-	proc->p_cwd = NULL;
+	proc->p_cwd = NULL;												// directory corrente
 
-	return proc;
+	proc_init_waitpid(proc,name);									// (3) avvia supporto per waitpid (assegna PID e crea strumenti per sincronizzazione)
+
+	return proc;												// restituisce il puntatore al nuovo processo
 }
+
+// ---------------------------------------------------------------------------------------------------------
 
 /*
  * Destroy a proc structure.
@@ -92,7 +194,7 @@ proc_create(const char *name)
  * probably want to do so.
  */
 void
-proc_destroy(struct proc *proc)
+proc_destroy(struct proc *proc)								// 6. Cleanup completo del processo
 {
 	/*
 	 * You probably want to destroy and null out much of the
@@ -112,13 +214,13 @@ proc_destroy(struct proc *proc)
 	 */
 
 	/* VFS fields */
-	if (proc->p_cwd) {
-		VOP_DECREF(proc->p_cwd);
-		proc->p_cwd = NULL;
+	if (proc->p_cwd) {											// verifica se il processo ha una directory corrente
+		VOP_DECREF(proc->p_cwd);									// decrementa il riferimento alla directory
+		proc->p_cwd = NULL;											// imposta la directory corrente a NULL
 	}
 
 	/* VM fields */
-	if (proc->p_addrspace) {
+	if (proc->p_addrspace) {									// verifica se il processo ha un address space
 		/*
 		 * If p is the current process, remove it safely from
 		 * p_addrspace before destroying it. This makes sure
@@ -154,22 +256,24 @@ proc_destroy(struct proc *proc)
 		 */
 		struct addrspace *as;
 
-		if (proc == curproc) {
-			as = proc_setas(NULL);
-			as_deactivate();
+		if (proc == curproc) {									// se è il processo corrente
+			as = proc_setas(NULL);									// rimuove l'address space dal processo corrente e lo salva in as
+			as_deactivate();										// disattiva l'address space dalla MMU
 		}
-		else {
-			as = proc->p_addrspace;
-			proc->p_addrspace = NULL;
+		else {													// altrimenti, se non è il processo corrente
+			as = proc->p_addrspace;									// ottiene l'address space e lo salva in as
+			proc->p_addrspace = NULL;								// rimuove l'address space dal processo
 		}
-		as_destroy(as);
+		as_destroy(as);											// distrugge l'address space salvato in as
 	}
 
 	KASSERT(proc->p_numthreads == 0);
-	spinlock_cleanup(&proc->p_lock);
+	spinlock_cleanup(&proc->p_lock);							// pulisce spinlock del processo
 
-	kfree(proc->p_name);
-	kfree(proc);
+	proc_end_waitpid(proc);										// (7) rimuove processo dalla tabella e distrugge strutture per sincronizzazione
+
+	kfree(proc->p_name);										// libera memoria prima dal p_name e poi dall'intero proc
+	kfree(proc);					
 }
 
 /*
@@ -182,7 +286,14 @@ proc_bootstrap(void)
 	if (kproc == NULL) {
 		panic("proc_create for kproc failed\n");
 	}
+#if OPT_WAITPID
+	spinlock_init(&processTable.lk);
+	/* kernel process is not registered in the table */
+	processTable.active = 1;
+#endif
 }
+
+// ---------------------------------------------------------------------------------------------------------
 
 /*
  * Create a fresh proc for use by runprogram.
@@ -191,18 +302,18 @@ proc_bootstrap(void)
  * process's (that is, the kernel menu's) current directory.
  */
 struct proc *
-proc_create_runprogram(const char *name)
+proc_create_runprogram(const char *name)					// 1. Creazione del processo e eredita directory dal padre -> restituisce il puntatore al nuovo processo
 {
 	struct proc *newproc;
 
-	newproc = proc_create(name);
+	newproc = proc_create(name);								// (2) crea la struttura base del processo
 	if (newproc == NULL) {
 		return NULL;
 	}
 
 	/* VM fields */
 
-	newproc->p_addrspace = NULL;
+	newproc->p_addrspace = NULL;								// inizializza lo spazio di indirizzamento a NULL
 
 	/* VFS fields */
 
@@ -211,15 +322,17 @@ proc_create_runprogram(const char *name)
 	 * (We don't need to lock the new process, though, as we have
 	 * the only reference to it.)
 	 */
-	spinlock_acquire(&curproc->p_lock);
-	if (curproc->p_cwd != NULL) {
-		VOP_INCREF(curproc->p_cwd);
-		newproc->p_cwd = curproc->p_cwd;
+	spinlock_acquire(&curproc->p_lock);							// lock su processo corrente (padre)
+	if (curproc->p_cwd != NULL) {								
+		VOP_INCREF(curproc->p_cwd);								// incrementa riferimento alla directory padre
+		newproc->p_cwd = curproc->p_cwd;						// copia la directory corrente nel nuovo processo
 	}
 	spinlock_release(&curproc->p_lock);
 
-	return newproc;
+	return newproc;												// restituisce il puntatore al nuovo processo
 }
+
+// ---------------------------------------------------------------------------------------------------------
 
 /*
  * Add a thread to a process. Either the thread or the process might
@@ -318,3 +431,34 @@ proc_setas(struct addrspace *newas)
 	spinlock_release(&proc->p_lock);
 	return oldas;
 }
+
+
+// ---------------------------------------------------------------------------------------------------------
+
+int 
+proc_wait(struct proc *proc)									// 5. Attende terminazione -> restituisce status
+{
+#if OPT_WAITPID
+        int return_status;
+        /* NULL and kernel proc forbidden */
+	KASSERT(proc != NULL);
+	KASSERT(proc != kproc);
+
+        /* wait on semaphore or condition variable */ 
+#if USE_SEMAPHORE_FOR_WAITPID
+        P(proc->p_sem);												// attesa sul semaforo che processo figlio termini, segnalato con sys__exit
+#else
+        lock_acquire(proc->p_lock);
+        cv_wait(proc->p_cv);										// attesa sul condvar che processo figlio termini, segnalato con sys__exit
+        lock_release(proc->p_lock);
+#endif
+        return_status = proc->p_status;								// copia lo status di uscita dal processo terminato
+        proc_destroy(proc);											// distrugge la struttura del processo (cleanup)
+        return return_status;										// restituisce lo status di uscita
+#else
+        /* this doesn't synchronize */ 
+        (void)proc;
+        return 0;
+#endif
+}
+
